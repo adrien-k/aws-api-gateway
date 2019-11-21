@@ -229,6 +229,12 @@ const createMethod = async ({ apig, apiId, endpoint }) => {
     params.authorizerId = endpoint.authorizerId
   }
 
+  if (endpoint.proxyURI && endpoint.greedyPath) {
+    params.requestParameters = {
+      [`method.request.path.${endpoint.greedyPath}`]: true
+    }
+  }
+
   try {
     await apig.putMethod(params).promise()
   } catch (e) {
@@ -286,10 +292,16 @@ const createIntegration = async ({ apig, lambda, apiId, endpoint }) => {
     resourceId: endpoint.id,
     restApiId: apiId,
     type: isLambda ? 'AWS_PROXY' : 'HTTP_PROXY',
-    integrationHttpMethod: 'POST',
+    integrationHttpMethod: isLambda ? 'POST' : endpoint.method,
     uri: isLambda
       ? `arn:aws:apigateway:${region}:lambda:path/2015-03-31/functions/${endpoint.function}/invocations`
       : endpoint.proxyURI
+  }
+
+  if (endpoint.proxyURI && endpoint.greedyPath) {
+    integrationParams.requestParameters = {
+      [`integration.request.path.${endpoint.greedyPath}`]: `method.request.path.${endpoint.greedyPath}`
+    }
   }
 
   try {

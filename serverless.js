@@ -73,6 +73,13 @@ class AwsApiGateway extends Component {
       region
     })
 
+    for (const endpoint of endpoints) {
+      const greedyMatch = endpoint.path.match(/\{(.*)\+\}$/)
+      if (greedyMatch) {
+        endpoint.greedyPath = greedyMatch[1]
+      }
+    }
+
     this.context.debug(`Deploying authorizers if any for API ID ${apiId}.`)
 
     endpoints = await createAuthorizers({ apig, lambda, apiId, endpoints })
