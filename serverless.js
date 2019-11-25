@@ -31,7 +31,7 @@ class AwsApiGateway extends Component {
 
     const config = { ...defaults, ...inputs }
 
-    config.name = this.state.name || this.context.resourceId()
+    config.name = this.state.name || inputs.name || this.context.resourceId()
 
     const { name, description, region, stage, endpointTypes } = config
 
