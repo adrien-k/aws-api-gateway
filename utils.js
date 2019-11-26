@@ -23,9 +23,44 @@ const retry = (fn, opts = {}) => {
   )
 }
 
+// Maximum 1 simultaneous calls and minimum 200ms between calls to AWS API
+// This could be fine-tuned, but we quickly get TooManyRequests errors, especially
+// when running this script from an AWS Lambda function
+const MAX_CONCURRENCY = 1
+const MIN_DELAY = 200
+const requestQueue = []
+let concurrency = 0
+let timeout
+
+const processNextQueueElement = () => {
+  if (!requestQueue.length) {
+    timeout = null
+    return
+  }
+
+  if (concurrency < MAX_CONCURRENCY) {
+    concurrency++
+    const next = requestQueue.shift()
+    next().then(() => {
+      concurrency--
+    })
+  }
+
+  timeout = setTimeout(processNextQueueElement, MIN_DELAY)
+}
+
+const throttleAwsRequestRequest = (awsRequest) => {
+  return new Promise((resolve, reject) => {
+    requestQueue.push(() => awsRequest.promise().then(resolve, reject))
+    if (!timeout) {
+      processNextQueueElement()
+    }
+  })
+}
+
 const apiExists = async ({ apig, apiId }) => {
   try {
-    await apig.getRestApi({ restApiId: apiId }).promise()
+    await throttleAwsRequestRequest(apig.getRestApi({ restApiId: apiId }))
     return true
   } catch (e) {
     if (e.code === 'NotFoundException') {
@@ -36,26 +71,27 @@ const apiExists = async ({ apig, apiId }) => {
 }
 
 const createApi = async ({ apig, name, description, endpointTypes }) => {
-  const api = await apig
-    .createRestApi({
+  const api = await throttleAwsRequestRequest(
+    apig.createRestApi({
       name,
       description,
       endpointConfiguration: {
         types: endpointTypes
       }
     })
-    .promise()
+  )
 
   return api.id
 }
 
 const getPathId = async ({ apig, apiId, endpoint }) => {
   // todo this called many times to stay up to date. Is it worth the latency?
-  const existingEndpoints = (await apig
-    .getResources({
+  const resourcesResponse = await throttleAwsRequestRequest(
+    apig.getResources({
       restApiId: apiId
     })
-    .promise()).items
+  )
+  const existingEndpoints = resourcesResponse.items
 
   if (!endpoint) {
     const rootResourceId = existingEndpoints.find(
@@ -85,7 +121,7 @@ const endpointExists = async ({ apig, apiId, endpoint }) => {
   }
 
   try {
-    await retry(() => apig.getMethod(params).promise())
+    await retry(() => throttleAwsRequestRequest(apig.getMethod(params)))
     return true
   } catch (e) {
     if (e.code === 'NotFoundException') {
@@ -199,7 +235,7 @@ const createPath = async ({ apig, apiId, endpoint }) => {
     restApiId: apiId
   }
 
-  const createdPath = await apig.createResource(params).promise()
+  const createdPath = await throttleAwsRequestRequest(apig.createResource(params))
 
   return createdPath.id
 }
@@ -236,7 +272,7 @@ const createMethod = async ({ apig, apiId, endpoint }) => {
   }
 
   try {
-    await apig.putMethod(params).promise()
+    await throttleAwsRequestRequest(apig.putMethod(params))
   } catch (e) {
     if (e.code === 'ConflictException' && endpoint.authorizerId) {
       // make sure authorizer config are always up to date
@@ -258,7 +294,7 @@ const createMethod = async ({ apig, apiId, endpoint }) => {
         ]
       }
 
-      await apig.updateMethod(updateMethodParams).promise()
+      await throttleAwsRequestRequest(apig.updateMethod(updateMethodParams))
     } else if (e.code !== 'ConflictException') {
       throw Error(e)
     }
@@ -305,7 +341,7 @@ const createIntegration = async ({ apig, lambda, apiId, endpoint }) => {
   }
 
   try {
-    await apig.putIntegration(integrationParams).promise()
+    await throttleAwsRequestRequest(apig.putIntegration(integrationParams))
   } catch (e) {
     if (e.code === 'ConflictException') {
       // this usually happens when there are too many endpoints for
@@ -350,7 +386,9 @@ const createIntegrations = async ({ apig, lambda, apiId, endpoints }) => {
 }
 
 const createDeployment = async ({ apig, apiId, stage }) => {
-  const deployment = await apig.createDeployment({ restApiId: apiId, stageName: stage }).promise()
+  const deployment = await throttleAwsRequestRequest(
+    apig.createDeployment({ restApiId: apiId, stageName: stage })
+  )
 
   // todo add update stage functionality
 
@@ -365,7 +403,7 @@ const removeMethod = async ({ apig, apiId, endpoint }) => {
   }
 
   try {
-    await apig.deleteMethod(params).promise()
+    await throttleAwsRequestRequest(apig.deleteMethod(params))
   } catch (e) {
     if (e.code !== 'NotFoundException') {
       throw Error(e)
@@ -387,7 +425,9 @@ const removeMethods = async ({ apig, apiId, endpoints }) => {
 
 const removeResource = async ({ apig, apiId, endpoint }) => {
   try {
-    await apig.deleteResource({ restApiId: apiId, resourceId: endpoint.id }).promise()
+    await throttleAwsRequestRequest(
+      apig.deleteResource({ restApiId: apiId, resourceId: endpoint.id })
+    )
   } catch (e) {
     if (e.code !== 'NotFoundException') {
       throw Error(e)
@@ -401,7 +441,7 @@ const removeResources = async ({ apig, apiId, endpoints }) => {
     restApiId: apiId
   }
 
-  const resources = await apig.getResources(params).promise()
+  const resources = await throttleAwsRequestRequest(apig.getResources(params))
 
   const promises = []
 
@@ -432,7 +472,7 @@ const removeResources = async ({ apig, apiId, endpoints }) => {
 
 const removeApi = async ({ apig, apiId }) => {
   try {
-    await apig.deleteRestApi({ restApiId: apiId }).promise()
+    await throttleAwsRequestRequest(apig.deleteRestApi({ restApiId: apiId }))
   } catch (e) {}
 }
 
@@ -442,7 +482,7 @@ const createAuthorizer = async ({ apig, lambda, apiId, endpoint }) => {
     const region = endpoint.authorizer.split(':')[3]
     const accountId = endpoint.authorizer.split(':')[4]
 
-    const authorizers = await apig.getAuthorizers({ restApiId: apiId }).promise()
+    const authorizers = await throttleAwsRequestRequest(apig.getAuthorizers({ restApiId: apiId }))
 
     let authorizer = authorizers.items.find(
       (authorizerItem) => authorizerItem.name === authorizerName
@@ -457,7 +497,7 @@ const createAuthorizer = async ({ apig, lambda, apiId, endpoint }) => {
         identitySource: 'method.request.header.Auth'
       }
 
-      authorizer = await apig.createAuthorizer(createAuthorizerParams).promise()
+      authorizer = await throttleAwsRequestRequest(apig.createAuthorizer(createAuthorizerParams))
 
       const permissionsParams = {
         Action: 'lambda:InvokeFunction',
@@ -508,11 +548,11 @@ const removeAuthorizer = async ({ apig, apiId, endpoint }) => {
       ]
     }
 
-    await apig.updateMethod(updateMethodParams).promise()
+    await throttleAwsRequestRequest(apig.updateMethod(updateMethodParams))
 
     const deleteAuthorizerParams = { restApiId: apiId, authorizerId: endpoint.authorizerId }
 
-    await apig.deleteAuthorizer(deleteAuthorizerParams).promise()
+    await throttleAwsRequestRequest(apig.deleteAuthorizer(deleteAuthorizerParams))
   }
   return endpoint
 }
