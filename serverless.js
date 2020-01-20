@@ -31,7 +31,7 @@ class AwsApiGateway extends Component {
 
     const config = { ...defaults, ...inputs }
 
-    config.name = this.state.name || this.context.resourceId()
+    config.name = this.state.name || inputs.name || this.context.resourceId()
 
     const { name, description, region, stage, endpointTypes } = config
 
@@ -72,6 +72,13 @@ class AwsApiGateway extends Component {
       stage,
       region
     })
+
+    for (const endpoint of endpoints) {
+      const greedyMatch = endpoint.path.match(/\{(.*)\+\}$/)
+      if (greedyMatch) {
+        endpoint.greedyPath = greedyMatch[1]
+      }
+    }
 
     this.context.debug(`Deploying authorizers if any for API ID ${apiId}.`)
 
