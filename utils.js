@@ -78,7 +78,8 @@ const createApi = async ({ apig, name, description, endpointTypes }) => {
       description,
       endpointConfiguration: {
         types: endpointTypes
-      }
+      },
+      minimumCompressionSize: 100 // 100bytes
     })
   )
 
@@ -258,7 +259,7 @@ const createMethod = async ({ apig, apiId, endpoint }) => {
     httpMethod: endpoint.method,
     resourceId: endpoint.id,
     restApiId: apiId,
-    apiKeyRequired:  (typeof endpoint.apiKeyRequired !== "undefined") && endpoint.apiKeyRequired
+    apiKeyRequired: typeof endpoint.apiKeyRequired !== 'undefined' && endpoint.apiKeyRequired
   }
 
   if (endpoint.authorizerId) {
@@ -330,15 +331,18 @@ const createIntegration = async ({ apig, lambda, apiId, endpoint }) => {
     restApiId: apiId,
     type: isLambda ? 'AWS_PROXY' : 'HTTP_PROXY',
     integrationHttpMethod: isLambda ? 'POST' : endpoint.method,
+    requestParameters: {
+      'integration.request.header.Accept-Encoding': "'identity'"
+    },
     uri: isLambda
       ? `arn:aws:apigateway:${region}:lambda:path/2015-03-31/functions/${endpoint.function}/invocations`
       : endpoint.proxyURI
   }
 
   if (endpoint.proxyURI && endpoint.greedyPath) {
-    integrationParams.requestParameters = {
-      [`integration.request.path.${endpoint.greedyPath}`]: `method.request.path.${endpoint.greedyPath}`
-    }
+    integrationParams.requestParameters[
+      `integration.request.path.${endpoint.greedyPath}`
+    ] = `method.request.path.${endpoint.greedyPath}`
   }
 
   try {
@@ -483,7 +487,9 @@ const createAuthorizer = async ({ apig, lambda, apiId, endpoint }) => {
     const region = endpoint.authorizer.split(':')[3]
     const accountId = endpoint.authorizer.split(':')[4]
 
-    const authorizers = await throttleAwsRequestRequest(() => apig.getAuthorizers({ restApiId: apiId }))
+    const authorizers = await throttleAwsRequestRequest(() =>
+      apig.getAuthorizers({ restApiId: apiId })
+    )
 
     let authorizer = authorizers.items.find(
       (authorizerItem) => authorizerItem.name === authorizerName
@@ -498,7 +504,9 @@ const createAuthorizer = async ({ apig, lambda, apiId, endpoint }) => {
         identitySource: 'method.request.header.Auth'
       }
 
-      authorizer = await throttleAwsRequestRequest(() => apig.createAuthorizer(createAuthorizerParams))
+      authorizer = await throttleAwsRequestRequest(() =>
+        apig.createAuthorizer(createAuthorizerParams)
+      )
 
       const permissionsParams = {
         Action: 'lambda:InvokeFunction',
